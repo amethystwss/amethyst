@@ -38,7 +38,7 @@ const _startup = require('./startup');
 
 _startup.validate_system();
 
-// const configuration = _startup.parse_config('/etc/amethyst/amethyst.conf');
+const configuration_obj = _startup.parse_config('/etc/amethyst/amethyst.conf');
 
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////// END /////////////////////////////////////

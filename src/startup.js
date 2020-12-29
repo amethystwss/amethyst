@@ -34,6 +34,7 @@ const fs = require('fs');
 const os = require('os');
 
 const _exit_codes = require('./exit_codes');
+const _config_parser = require('./config_parser');
 
 ///////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////// LIBRARY ///////////////////////////////////
@@ -76,8 +77,27 @@ module.exports = {
     }
 
     // We have now confirmed that we are running on a Debian-like system
-  }
+  },
+  
+  /**
+   * Parse all configuration files.
+   *
+   * When called, this method will invoke the configuration parsing method
+   * inside of ./config_parser, and automatically exit with BAD_CONFIG, if
+   * parsing fails. This method will return an object with two objects:
+   *
+   * - config - The configuration object containing config for all modules
+   * - events - The EventStore object used to register events from modules
+   */
+  parse_config(configuration_file) {
+    let data = config_parser(configuration_file);
 
+    if(data.type === "ERROR") {
+      process.exit(_exit_codes.BAD_CONFIG);
+    }
+
+    return data;
+  }
 };
 
 ///////////////////////////////////////////////////////////////////////////////
