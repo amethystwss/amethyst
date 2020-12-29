@@ -50,7 +50,16 @@ module.exports = {
    * comes out as the result of the use of an operating system that Amethyst
    * was not written for.
    */
-  BAD_ENVIRONMENT: 1
+  BAD_ENVIRONMENT: 1,
+
+  /**
+   * There were errors reading the configuration file.
+   *
+   * This code is thrown after even a slight error that might cause the server
+   * issues later on during execution. This could be an issue during parsing,
+   * execution, or even an error inside a module's directive handlers.
+   */
+  BAD_CONFIG: 2
 
 };
 
