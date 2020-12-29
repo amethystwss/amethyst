@@ -90,7 +90,7 @@ module.exports = {
    * - events - The EventStore object used to register events from modules
    */
   parse_config(configuration_file) {
-    let data = config_parser(configuration_file);
+    let data = _config_parser(configuration_file);
 
     if(data.type === "ERROR") {
       process.exit(_exit_codes.BAD_CONFIG);
