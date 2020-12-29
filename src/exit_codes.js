@@ -43,6 +43,17 @@ File
 module.exports = {
   
   /**
+   * General or unknown error.
+   *
+   * CONTRIBUTORS ATTENTION: Please do not use this. It is here mainly for use
+   * with other programs and for complete compliance with GNU's special exit
+   * code meanings.
+   *
+   * Learn more: https://tldp.org/LDP/abs/html/exitcodes.html
+   */
+  UNKNOWN: 1,
+
+  /**
    * The operating environment will not work with this software.
    *
    * This code is thrown whenever it has been detected that there is a fatal
@@ -50,7 +61,7 @@ module.exports = {
    * comes out as the result of the use of an operating system that Amethyst
    * was not written for.
    */
-  BAD_ENVIRONMENT: 1,
+  BAD_ENVIRONMENT: 3,
 
   /**
    * There were errors reading the configuration file.
@@ -59,7 +70,7 @@ module.exports = {
    * issues later on during execution. This could be an issue during parsing,
    * execution, or even an error inside a module's directive handlers.
    */
-  BAD_CONFIG: 2
+  BAD_CONFIG: 4
 
 };
 
