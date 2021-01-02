@@ -58,15 +58,7 @@ module.exports = {
    * cross-platform as possible.
    */
   validate_system: function validate_system() {
-    let server_not_for_os = false;
-
     if(os.platform() !== 'linux') {
-      server_not_for_os = true;
-    } else {
-      
-    }
-
-    if(server_not_for_os) {
       console.error("error: fatal: This program was not written for your operating system!");
       console.error("error: fatal: Please consider contributing if you think you can help!");
       console.error("error: fatal: ");
