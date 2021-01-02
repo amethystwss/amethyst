@@ -54,7 +54,7 @@ module.exports = {
       
         return {"type": "GOOD"};
       } else {
-        return {"type": "ERROR", "msg": "not a valid positive integer: " + escape_string(seconds)};
+        return {"type": "ERROR", "msg": "not a valid positive integer: " + parser.escape_string(seconds)};
       }
     }
   }
