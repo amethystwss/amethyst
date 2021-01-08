@@ -24,10 +24,15 @@ class EventStore {
     this.#register_count = 0;
   }
 
-  register(module, priority, name, callback, fullconfig=false) {
+  register(module, priority, name, object) {
+    object = {
+      config: "local",
+      ...object
+    };
+
     this.store[priority.toString()] = this.store[priority.toString()]||{};
     this.store[priority.toString()][module.toString()] = this.store[priority.toString()][module.toString()]||{}
-    this.store[priority.toString()][module.toString()][name.toString()] = {id:this.#register_count,callback,fullconfig};
+    this.store[priority.toString()][module.toString()][name.toString()] = {id:this.#register_count,callback:object.callback,config:object.config};
     ++this.#register_count;
   }
 
@@ -50,7 +55,7 @@ class EventStore {
           priority: parseInt(key),
           name: event_name,
           id: this.store[key][module][event_name].id,
-          fullconfig: this.store[key][module][event_name].fullconfig
+          config: this.store[key][module][event_name].config
         });
       }
     }
@@ -64,7 +69,13 @@ class EventStore {
 
     for(let frame of frames) {
       res.push({
-        ret: frame.callback.apply(this_obj, [(frame.fullconfig?config_obj:config_obj[frame.module]), ...opts]),
+        ret: (function() {
+          if(frame.config === "local") {
+            return frame.callback.apply(this_obj, [config_obj[frame.module], ...opts]);
+          } else {
+            return frame.callback.apply(this_obj, [config_obj, ...opts]);
+          }
+        })(),
         callback: frame.callback,
         module: frame.module,
         priority: frame.priority,
@@ -93,6 +104,7 @@ class EventStore {
     let maxPriorityWidth = 8;   // Room for "Priority"
     let maxModuleWidth = 6;     // Room for "Module"
     let maxEventNameWidth = 5;  // Room for "Event"
+    let maxAccessWidth = 12;    // Room for "ConfigAccess"
 
     for(let key of keys) {
       let modules = Object.keys(this.store[key]);
@@ -106,7 +118,7 @@ class EventStore {
             priority: parseInt(key),
             name: event_name,
             id: this.store[key][module][event_name].id,
-            fullconfig: this.store[key][module][event_name].fullconfig
+            config: this.store[key][module][event_name].config
           };
 
           res.push(frame);
@@ -115,6 +127,7 @@ class EventStore {
           maxPriorityWidth = Math.max(maxPriorityWidth, key.length);
           maxModuleWidth = Math.max(maxModuleWidth, module.length);
           maxEventNameWidth = Math.max(maxEventNameWidth, event_name.length);
+          maxAccessWidth = Math.max(maxAccessWidth, (frame.config==="local"?"module":"global").length);
         }
       }
     }
@@ -129,21 +142,25 @@ class EventStore {
     let priorityHeader = pad("Priority", maxPriorityWidth);
     let moduleHeader = pad("Module", maxModuleWidth);
     let eventHeader = pad("Event", maxEventNameWidth);
+    let accessHeader = pad("ConfigAccess", maxAccessWidth);
 
     str += "| " + idHeader + " ";
     str += "| " + priorityHeader + " ";
     str += "| " + moduleHeader + " ";
-    str += "| " + eventHeader + " |\n";
+    str += "| " + eventHeader + " ";
+    str += "| " + accessHeader + " |\n";
     str += "+" + "-".repeat(idHeader.length+2);
     str += "+" + "-".repeat(priorityHeader.length+2);
     str += "+" + "-".repeat(moduleHeader.length+2);
-    str += "+" + "-".repeat(eventHeader.length+2) + "+\n";
+    str += "+" + "-".repeat(eventHeader.length+2);
+    str += "+" + "-".repeat(accessHeader.length+2) + "+\n";
 
     for(let row of res) {
       str += "| " + pad(row.id.toString(), maxIdWidth) + " ";
       str += "| " + pad(row.priority.toString(), maxPriorityWidth) + " ";
       str += "| " + pad(row.module, maxModuleWidth) + " ";
-      str += "| " + pad(row.name, maxEventNameWidth) + " |\n";
+      str += "| " + pad(row.name, maxEventNameWidth) + " ";
+      str += "| " + pad(row.config==="local"?"module":"global", maxAccessWidth) + " |\n";
     }
 
     return str.trim();
@@ -174,7 +191,7 @@ class EventStore {
             priority: parseInt(key),
             name: event_name,
             id: this.store[key][module][event_name].id,
-            fullconfig: this.store[key][module][event_name].fullconfig
+            config: this.store[key][module][event_name].config
           };
 
           res.push(frame);
@@ -235,7 +252,7 @@ class EventStore {
             priority: parseInt(key),
             name: event_name,
             id: this.store[key][module][event_name].id,
-            fullconfig: this.store[key][module][event_name].fullconfig
+            config: this.store[key][module][event_name].config
           };
 
           res.push(frame);
@@ -305,7 +322,7 @@ class EventStore {
             priority: parseInt(key),
             name: event_name,
             id: this.store[key][module][event_name].id,
-            fullconfig: this.store[key][module][event_name].fullconfig
+            config: this.store[key][module][event_name].config
           };
 
           res.push(frame);
@@ -741,482 +758,583 @@ const escape_string = function escape_string(str) {
 }
 
 let Directives = {
-  "PidFile": function(config, bstack, _filename) {
-    if(bstack.length) return {"type": "ERROR", "msg": "directive not allowed inside blocks"};
-    if(_filename === undefined) return {"type": "ERROR", "msg": "no filename given"};
+  "PidFile": {
+    callback: function(config, bstack, _filename) {
+      if(bstack.length) return {"type": "ERROR", "msg": "directive not allowed inside blocks"};
+      if(_filename === undefined) return {"type": "ERROR", "msg": "no filename given"};
 
-    let filename = resolve_envvars(_filename);
-    if(filename instanceof Array) return filename;
+      let filename = resolve_envvars(_filename);
+      if(filename instanceof Array) return filename;
     
-    config.pidfile = filename;
-    
-    return {"type": "GOOD"};
-  },
-  "Timeout": function(config, bstack, seconds) {
-    if(seconds === undefined) return {"type": "ERROR", "msg": "no time duration given"};
-    if(/^[0-9]+(?:\.[0-9]+)?$/.test(seconds)) {
-      config.timeout = parseInt(seconds);
+      config.pidfile = filename;
     
       return {"type": "GOOD"};
-    } else {
-      return {"type": "ERROR", "msg": "not a valid positive integer: " + escape_string(seconds)};
-    }
+    },
+    config: "local"
   },
-  "User": function(config, bstack, _username) {
-    if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
-    if(_username === undefined) return {"type": "ERROR", "msg": "username argument missing"};
-    let username = resolve_envvars(_username);
-    if(username instanceof Array) return username;
-
-    config.username = username;
+  "Timeout": {
+    callback: function(config, bstack, seconds) {
+      if(seconds === undefined) return {"type": "ERROR", "msg": "no time duration given"};
+      if(/^[0-9]+(?:\.[0-9]+)?$/.test(seconds)) {
+        config.timeout = parseInt(seconds);
     
-    return {"type": "GOOD"};
-  },
-  "Group": function(config, bstack, _group_name) {
-    if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
-    if(_group_name === undefined) return {"type": "ERROR", "msg": "group name argument missing"};
-    let group_name = resolve_envvars(_group_name);
-    if(group_name instanceof Array) return group_name;
-
-    config.groupname = group_name;
-    
-    return {"type": "GOOD"};
-  },
-  "ErrorLog": function(config, bstack, _filename) {
-    if(_filename === undefined) return {"type": "ERROR", "msg": "must specify filename"};
-    let filename = resolve_envvars(_filename);
-    if(filename instanceof Array) return filename;
-
-    config.logs = config.logs||{};
-    config.logs.error = config.logs.error||[];
-    config.logs.error.push(filename);
-    
-    return {"type": "GOOD"};
-  },
-  "Listen": function(config, bstack, port) {
-    if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
-    if(port === undefined) return {"type": "ERROR", "msg": "must specify a port number"};
-    if(/^[0-9]+(?:\.[0-9]+)?$/.test(port)) {
-      let num = parseInt(port);
-      
-      if(num >= 65536) {
-        return {"type": "ERROR", "msg": "not a valid port number: " + num};
-      } else if(num === 0 || num >= 49152) {
-        return {"type": "ERROR", "msg": "not a listenable port number: " + num};
+        return {"type": "GOOD"};
+      } else {
+        return {"type": "ERROR", "msg": "not a valid positive integer: " + escape_string(seconds)};
       }
+    },
+    config: "local"
+  },
+  "User": {
+    callback: function(config, bstack, _username) {
+      if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
+      if(_username === undefined) return {"type": "ERROR", "msg": "username argument missing"};
+      let username = resolve_envvars(_username);
+      if(username instanceof Array) return username;
 
-      config.port = num;
+      config.username = username;
     
       return {"type": "GOOD"};
-    } else {
-      return {"type": "ERROR", "msg": "not a valid positive integer: " + escape_string(seconds)};
-    }
+    },
+    config: "local"
   },
-  "Include": function(config, bstack, _filename) {
-    let pattern = resolve_envvars(_filename);
-    if(pattern instanceof Array) return pattern;
-    
-    let dir = pattern.substr(0, pattern.lastIndexOf('/'));
-    let filecard = pattern.substr(pattern.lastIndexOf('/')+1);
-    let fileregex = new RegExp(filecard.replace(/\*/g, '[^/]+').replace(/\./g, '\\.') + "$");
-  
-    let files = fs.readdirSync(dir);
-    
-    let error = false;
+  "Group": {
+    callback: function(config, bstack, _group_name) {
+      if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
+      if(_group_name === undefined) return {"type": "ERROR", "msg": "group name argument missing"};
+      let group_name = resolve_envvars(_group_name);
+      if(group_name instanceof Array) return group_name;
 
-    for(let file of files) {
-      if(fileregex.test(file)) {
-        let filename = dir + "/" + file;
-        let config_frames = parse_file(filename);
+      config.groupname = group_name;
+    
+      return {"type": "GOOD"};
+    },
+    config: "local"
+  },
+  "ErrorLog": {
+    callback: function(config, bstack, _filename) {
+      if(_filename === undefined) return {"type": "ERROR", "msg": "must specify filename"};
+      let filename = resolve_envvars(_filename);
+      if(filename instanceof Array) return filename;
+
+      config.logs = config.logs||{};
+      config.logs.error = config.logs.error||[];
+      config.logs.error.push(filename);
       
-        if(config_frames.type === "ERROR") {
-          return {"type": "ERROR", "msg": (filename + ": " + config_frames.content[0].msg)};
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "Listen": {
+    callback: function(config, bstack, port) {
+      if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
+      if(port === undefined) return {"type": "ERROR", "msg": "must specify a port number"};
+      if(/^[0-9]+(?:\.[0-9]+)?$/.test(port)) {
+        let num = parseInt(port);
+        
+        if(num >= 65536) {
+          return {"type": "ERROR", "msg": "not a valid port number: " + num};
+        } else if(num === 0 || num >= 49152) {
+          return {"type": "ERROR", "msg": "not a listenable port number: " + num};
         }
 
-        let _error = execute_frames(config, bstack, config_frames);
-        if(_error) error = true;
-      }
-    }
-
-    if(error) return true;
-
-    return {"type": "GOOD"};
-  },
-  "Require": function(config, bstack, ...opts) {
-    if(opts.length === 0) return {"type": "ERROR", "msg": "must have at least one requirement"};
-
-    config.grant_ip = config.grant_ip||[];
-    config.deny_ip = config.deny_ip||[];
-
-    if(opts.length === 2 && ['granted', 'denied'].indexOf(opts[1].toLowerCase()) !== -1) {
-      let id = opts[0].toLowerCase();  // Some form of client identifier
-      let mode = opts[1].toLowerCase();
+        config.port = num;
       
-      if(mode === "granted") {
-        if(id === "local") {
-          if(config.grant_ip.indexOf("::1") === -1) config.grant_ip.push("::1");
-          if(config.grant_ip.indexOf("127.0.0.0/8") === -1) config.grant_ip.push("127.0.0.0/8");
-        } else if(id === "all") {
-          delete config.deny_ip;
-          delete config.grant_ip;
-        } else if(net.isIP(id)) {
-          config.grant_ip.push(id);
-        } else if(net.isIP(id.substr(0, id.lastIndexOf('/')))) {
-          let ipv = net.isIP(id.substr(0, id.lastIndexOf('/')));
-          let sn = parseInt(id.substr(id.lastIndexOf('/')+1))
+        return {"type": "GOOD"};
+      } else {
+        return {"type": "ERROR", "msg": "not a valid positive integer: " + escape_string(seconds)};
+      }
+    },
+    config: "local",
+  },
+  "Include": {
+    callback: function(config, bstack, _filename) {
+      let pattern = resolve_envvars(_filename);
+      if(pattern instanceof Array) return pattern;
+      
+      let dir = pattern.substr(0, pattern.lastIndexOf('/'));
+      let filecard = pattern.substr(pattern.lastIndexOf('/')+1);
+      let fileregex = new RegExp(filecard.replace(/\*/g, '[^/]+').replace(/\./g, '\\.') + "$");
+    
+      let files = fs.readdirSync(dir);
+      
+      let error = false;
 
-          if(ipv === 4 && (sn > 32 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
-          if(ipv === 6 && (sn > 128 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
-          
-          if(ipv === 4) {
-            let block = 0;
-            id.substr(0, id.lastIndexOf('/')).split('.').forEach(item=>{
-              block <<= 8;
-              block |= parseInt(item);
-            });
+      for(let file of files) {
+        if(fileregex.test(file)) {
+          let filename = dir + "/" + file;
+          let config_frames = parse_file(filename);
+        
+          if(config_frames.type === "ERROR") {
+            return {"type": "ERROR", "msg": (filename + ": " + config_frames.content[0].msg)};
+          }
 
-            block >>= 32-sn;
-            block <<= 32-sn;
+          let _error = execute_frames(config, bstack, config_frames);
+          if(_error) error = true;
+        }
+      }
 
-            let subnet = ((block>>24)&0xFF) + "." +
-                         ((block>>16)&0xFF) + "." +
-                         ((block>> 8)&0xFF) + "." +
-                         ((block    )&0xFF) + "/" + sn;
+      if(error) return true;
 
-            if(config.grant_ip.indexOf(subnet) === -1) config.grant_ip.push(subnet);
-          } else {
+      return {"type": "GOOD"};
+    },
+    config: "global",
+  },
+  "Require": {
+    callback: function(config, bstack, ...opts) {
+      if(opts.length === 0) return {"type": "ERROR", "msg": "must have at least one requirement"};
+
+      config.grant_ip = config.grant_ip||[];
+      config.deny_ip = config.deny_ip||[];
+
+      if(opts.length === 2 && ['granted', 'denied'].indexOf(opts[1].toLowerCase()) !== -1) {
+        let id = opts[0].toLowerCase();  // Some form of client identifier
+        let mode = opts[1].toLowerCase();
+        
+        if(mode === "granted") {
+          if(id === "local") {
+            if(config.grant_ip.indexOf("::1") === -1) config.grant_ip.push("::1");
+            if(config.grant_ip.indexOf("127.0.0.0/8") === -1) config.grant_ip.push("127.0.0.0/8");
+          } else if(id === "all") {
+            delete config.deny_ip;
+            delete config.grant_ip;
+          } else if(net.isIP(id)) {
             config.grant_ip.push(id);
+          } else if(net.isIP(id.substr(0, id.lastIndexOf('/')))) {
+            let ipv = net.isIP(id.substr(0, id.lastIndexOf('/')));
+            let sn = parseInt(id.substr(id.lastIndexOf('/')+1))
+
+            if(ipv === 4 && (sn > 32 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
+            if(ipv === 6 && (sn > 128 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
+            
+            if(ipv === 4) {
+              let block = 0;
+              id.substr(0, id.lastIndexOf('/')).split('.').forEach(item=>{
+                block <<= 8;
+                block |= parseInt(item);
+              });
+
+              block >>= 32-sn;
+              block <<= 32-sn;
+
+              let subnet = ((block>>24)&0xFF) + "." +
+                           ((block>>16)&0xFF) + "." +
+                           ((block>> 8)&0xFF) + "." +
+                           ((block    )&0xFF) + "/" + sn;
+
+              if(config.grant_ip.indexOf(subnet) === -1) config.grant_ip.push(subnet);
+            } else {
+              config.grant_ip.push(id);
+            }
+          } else {
+            return {"type": "ERROR", "msg": "invalid IP address: " + escape_string(opt)};
           }
         } else {
-          return {"type": "ERROR", "msg": "invalid IP address: " + escape_string(opt)};
+          if(id === "local") {
+            if(config.deny_ip.indexOf("::1") === -1) config.deny_ip.push("::1");
+            if(config.deny_ip.indexOf("127.0.0.0/8") === -1) config.deny_ip.push("127.0.0.0/8");
+          } else if(id === "all") {
+            config.deny_ip = ["0.0.0.0/0"];
+            delete config.grant_ip;
+          } else if(net.isIP(id)) {
+            config.deny_ip.push(id);
+          } else if(net.isIP(id.substr(0, id.lastIndexOf('/')))) {
+            let ipv = net.isIP(id.substr(0, id.lastIndexOf('/')));
+            let sn = parseInt(id.substr(id.lastIndexOf('/')+1))
+
+            if(ipv === 4 && (sn > 32 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
+            if(ipv === 6 && (sn > 128 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
+            
+            if(ipv === 4) {
+              let block = 0;
+              id.substr(0, id.lastIndexOf('/')).split('.').forEach(item=>{
+                block <<= 8;
+                block |= parseInt(item);
+              });
+
+              block >>= 32-sn;
+              block <<= 32-sn;
+
+              let subnet = ((block>>24)&0xFF) + "." +
+                           ((block>>16)&0xFF) + "." +
+                           ((block>> 8)&0xFF) + "." +
+                           ((block    )&0xFF) + "/" + sn;
+
+              if(config.deny_ip.indexOf(subnet) === -1) config.deny_ip.push(subnet);
+            } else {
+              config.deny_ip.push(id);
+            }
+          } else {
+            return {"type": "ERROR", "msg": "invalid IP address: " + escape_string(opt)};
+          }
+        }
+      } else if(opts.length === 2 && ['granted', 'denied'].indexOf(opts[1].toLowerCase()) === -1) {
+        return {"type": "ERROR", "msg": "unknown action: " + escape_string(opts[1])};
+      } else {
+        for(let opt of opts) {
+          if(opt.toLowerCase() === "local") {
+            config.grant_ip.push("::1");
+            config.grant_ip.push("127.0.0.0/8");
+          } else if(net.isIP(opt)) {
+            config.grant_ip.push(opt);
+          } else if(net.isIP(opt.substr(0, opt.lastIndexOf('/')))) {
+            let ipv = net.isIP(opt.substr(0, opt.lastIndexOf('/')));
+            let sn = parseInt(opt.substr(opt.lastIndexOf('/')+1))
+
+            if(ipv === 4 && (sn > 32 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
+            if(ipv === 6 && (sn > 128 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
+            
+            if(ipv === 4) {
+              let block = 0;
+              opt.substr(0, opt.lastIndexOf('/')).split('.').forEach(item=>{
+                block <<= 8;
+                block |= parseInt(item);
+              });
+
+              block >>= 32-sn;
+              block <<= 32-sn;
+
+              let subnet = ((block>>24)&0xFF) + "." +
+                           ((block>>16)&0xFF) + "." +
+                           ((block>> 8)&0xFF) + "." +
+                           ((block    )&0xFF) + "/" + sn;
+
+              if(config.grant_ip.indexOf(subnet) === -1) config.grant_ip.push(subnet);
+            } else {
+              config.grant_ip.push(opt);
+            }
+          } else {
+            return {"type": "ERROR", "msg": "invalid IP address: " + escape_string(opt)};
+          }
+        }
+      }
+
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "ErrorDocument": {
+    callback: function(config, bstack, code, _filename) {
+      if(code === undefined) return {"type": "ERROR", "msg": "two arguments required: Status Code and Filename"};
+      if(_filename === undefined) return {"type": "ERROR", "msg": "filename argument not specified"};
+
+      if(STATUS_CODES[code] === undefined) return {"type": "ERROR", "msg": "no such status code: " + code};
+      let filename = resolve_envvars(_filename);
+      if(filename instanceof Array) return filename;
+
+      config.webpages = config.webpages||{};
+      config.webpages[code] = filename;
+      
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "ServerTokens": {
+    callback: function(config, bstack, _opt) {
+      if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
+      let opt = _opt.toLowerCase();
+      config.headers = config.headers||{};
+
+      if(opt === "full") {
+        config.headers["server"] = AMETHYST_PRODUCT + "/" + AMETHYST_VERSION + " (" + AMETHYST_PLATFORM + ")";
+      } else if(opt === "min" || opt === "minimal") {
+        config.headers["server"] = AMETHYST_PRODUCT + "/" + AMETHYST_VERSION;
+      } else if(opt === "prod" || opt === "productonly") {
+        config.headers["server"] = AMETHYST_PRODUCT;
+      } else if(opt === "gone" && config.headers["server"]) {
+        delete config.headers["server"];
+      } else {
+        return {"type": "ERROR", "msg": "unknown token type: " + escape_string(opt)};
+      }
+      
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "Header": {
+    callback: function(config, bstack, _header, _value) {
+      if(_header === undefined) return {"type": "ERROR", "msg": "missing header-value arguments"};
+      if(_value === undefined) return {"type": "ERROR", "msg": "missing value argument"};
+      
+      let value = resolve_envvars(_value);
+      let header = _header.toLowerCase();
+      if(value instanceof Array) return value;
+ 
+      config.headers = config.headers||{};
+
+      if(DISALLOWED_CUSTOM_HEADERS.indexOf(header) === -1) {
+        config.headers[header] = value;
+      } else if(header === "server") {
+        return {"type": "ERROR", "msg": "not allowed to set server header; use ServerTokens directive"};
+      } else {
+        return {"type": "ERROR", "msg": "not allowed to set header: " + escape_string(header)};
+      }
+      
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "RemoteHostMode": {
+    callback: function(config, bstack, _mode) {
+      if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
+      if(_mode === undefined) return {"type": "ERROR", "msg": "missing argument: mode"};
+      let mode = resolve_envvars(_mode);
+      if(mode instanceof Array) return mode;
+      mode = mode.toLowerCase();
+      
+      if(mode === "proxy") {
+        config.proxy = true;
+      } else if(mode === "head") {
+        config.proxy = false;
+      } else {
+        return {"type": "ERROR", "msg": "unrecognized mode: " + escape_string(mode)};
+      }
+      
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "AccessLogFormat": {
+    callback: function(config, bstack, format, name) {
+      if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
+      if(format === undefined) return {"type": "ERROR", "msg": "missing format string"};
+      if(name === undefined) return {"type": "ERROR", "msg": "no name given for format string"};
+      if(name.length === 0) return {"type": "ERROR", "msg": "name must be longer than zero characters"};
+      
+      // TODO: Validate format argument
+
+      config.logs = config.logs||{};
+      config.logs.access_format = config.logs.access_format||{};
+
+      config.logs.access_format[name] = format;
+      
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "TimeFormat": {
+    callback: function(config, bstack, format) {
+      if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
+      if(format === undefined) return {"type": "ERROR", "msg": "missing format string"};
+
+      // TODO: Validate format argument
+
+      config.logs = config.logs||{};
+      config.logs.timefmt = format;
+      
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "TimeZone": {
+    callback: function(config, bstack, _opt, arg2) {
+      if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
+      if(_opt === undefined) return {"type": "ERROR", "msg": "at least one argument required"};
+      let opt = _opt.toLowerCase();
+
+      config.logs = config.logs||{};
+      
+      if(opt === "system") {
+        let d = new Date();
+        let z = d.getTimezoneOffset();
+        let name = d.toLocaleTimeString('en-us', {timeZoneName:'short'}).split(' ')[2];
+
+        config.logs.tz =  {name};
+        
+        let tzstr = "";
+        tzstr += (z>=0?'-':'+');  // backwards, I know. It's stupid.
+        tzstr += (Math.floor(Math.abs(z)/60)<10?("0"+Math.floor(Math.abs(z)/60)):Math.floor(Math.abs(z)/60));
+        tzstr += (Math.floor(Math.abs(z)%60)<10?("0"+Math.floor(Math.abs(z)%60)):Math.floor(Math.abs(z)%60));
+
+        config.logs.tz.time = tzstr;
+      } else if(opt === "z" || opt === "zulu") {
+        config.logs.tz = {name:"UTC", time:"+0000"};
+      } else if(arg2 && /^[a-z]{3}$/.test(opt) && /^[\+-][0-9]{2}:?[0-9]{2}$/.test(arg2)) {
+        config.logs.tz =  {name: opt, time: arg2.replace(':', '')};
+      } else if(arg2) {
+        return {"type": "ERROR", "msg": "invalid timezone spec: " + escape_string(opt.toUpperCase() + " " + arg2)};
+      } else {
+        return {"type": "ERROR", "msg": "invalid timezone string: " + escape_string(opt.toUpperCase())};
+      }
+
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "SetEnv": {
+    callback: function(config, bstack, _key, value) {
+      if(_key === undefined) return {"type": "ERROR", "msg": "no environment variable name specified"};
+      if(value === undefined) return {"type": "ERROR", "msg": "no environment variable value specified"};
+      let key = _key.toUpperCase();
+
+      if(/^[A-Z_][A-Z_0-9]*$/.test(key)) {
+        process.env[key] = value;
+      } else {
+        return {"type": "ERROR", "msg": "invalid environment variable name: " + escape_string(key)};
+      }
+
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "UnsetEnv": {
+    callback: function(config, bstack, _key, value) {
+      if(_key === undefined) return {"type": "ERROR", "msg": "no environment variable name specified"};
+      if(value === undefined) return {"type": "ERROR", "msg": "no environment variable value specified"};
+      let key = _key.toUpperCase();
+
+      if(/^[A-Z_][A-Z_0-9]*$/.test(key) && process.env[key] !== undefined) {
+        delete process.env[key];
+      } else {
+        return {"type": "ERROR", "msg": "invalid environment variable name: " + escape_string(key)};
+      }
+
+      return {"type": "GOOD"};
+    },
+    config: "local",
+  },
+  "LoadModule": {
+    callback: function(config, bstack, _module_name, _priority, _filename) {
+      if(_module_name === undefined) return {"type": "ERROR", "msg": "expected module name, priority, and path to src"};
+      if(_priority === undefined) return {"type": "ERROR", "msg": "expected priority and path to src in addition to module name"};
+      if(_filename === undefined) return {"type": "ERROR", "msg": "missing path to src file"};
+      let filename = resolve_envvars(_filename);
+      if(filename instanceof Array) return filename;
+      let module_name = _module_name.toLowerCase();
+      
+      if(modules.indexOf(module_name) !== -1) return {"type": "ERROR", "msg": "cannot load module " + escape_string(module_name) + ": module already loaded"};
+      if(!path.isAbsolute(filename)) filename = path.join(process.env.PWD + "/" + filename);
+      
+      let priority;
+
+      if(/^[\+-]?[0-9]+(?:\.[0-9]+)?$/.test(_priority)) {
+        priority = parseFloat(_priority);
+      } else {
+        return {"type": "ERROR", "msg": "invalid priority: not a number: " + escape_string(_priority)};
+      }
+
+      let mod = {};
+      
+      modules.push(module_name);
+      config[module_name] = {};
+      
+      try {
+        mod = require(filename);
+      } catch(err) {
+        if(err.constructor.name !== "Error") {
+          return {"type": "ERROR", "msg": "uncaught " + err.constructor.name + " while loading module: " + escape_string(filename) + ": " + err.messsage};
+        } else if(err.code === "MODULE_NOT_FOUND") {
+          return {"type": "ERROR", "msg": "no such module: " + escape_string(filename)};
+        } else if(err.code === "EISDIR") {
+          return {"type": "ERROR", "msg": "requested path is directory: " + escape_string(filename)};
+        } else if(err.code === "EACCESS") {
+          return {"type": "ERROR", "msg": "insufficient read privileges: " + escape_string(filename)};
+        }
+      }
+
+      if(mod.constructor.name === "Object") { 
+        if(mod.directives !== undefined && mod.directives !== null && mod.directives.constructor.name === "Object") {
+          for(let directive in mod.directives) {
+            if(Directives[directive] === undefined) {
+              modules_from_directives[directive] = module_name;
+              if(mod.directives[directive] instanceof Function) {
+                Directives[directive] = {
+                  callback: function() {
+                    try {
+                      return mod.directives[directive].apply(null, arguments);
+                    } catch(err) {
+                      return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
+                    }
+                  },
+                  config: "local"
+                }
+              } else if(mod.directives[directive] instanceof Object) {
+                let cb = function(){return {"type": "ERROR", "msg": "not implemented"};};
+                if(mod.directives[directive].callback instanceof Function) {
+                  cb = mod.directives[directive].callback;
+                }
+                
+                Directives[directive] = {
+                  callback: function() {
+                    try {
+                      return cb.apply(null, arguments);
+                    } catch(err) {
+                      return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
+                    }
+                  },
+                  config: (mod.directives[directive].config||"local")
+                }
+              }
+            }
+          }
+        }
+
+        if(mod.blocks !== undefined && mod.blocks !== null && mod.blocks.constructor.name === "Object") {
+          for(let block in mod.blocks) {
+            if(Blocks[block] === undefined) {
+              modules_from_blocks[block] = module_name;
+              if(mod.blocks[block] instanceof Function) {
+                Blocks[block] = {
+                  callback: function() {
+                    try {
+                      return mod.blocks[block].apply(null, arguments);
+                    } catch(err) {
+                      return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
+                    }
+                  }
+                }
+              } else if(mod.blocks[block] instanceof Object) {
+                let cb = function(){return {"type": "ERROR", "msg": "not implemented"};};
+                if(mod.blocks[block].callback instanceof Function) {
+                  cb = mod.blocks[block].callback;
+                }
+                
+                Block[block] = {
+                  callback: function() {
+                    try {
+                      return cb.apply(null, arguments);
+                    } catch(err) {
+                      return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if(mod.events !== undefined && mod.events !== null && mod.events.constructor.name === "Object") {
+          for(let event in mod.events) {
+            if(mod.events[event] instanceof Function) {
+              Events.register(module_name, priority, event, {
+                callback: (function() {
+                  try {
+                    return mod.events[event].apply(null, arguments);
+                  } catch(err) {
+                    return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
+                  }
+                }),
+                config: "local"
+              });
+            } else if(mod.events[event] instanceof Object) {
+              Events.register(module_name, priority, event, {
+                callback: (function() {
+                  try {
+                    return mod.events[event].callback.apply(null, arguments);
+                  } catch(err) {
+                    return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
+                  }
+                }),
+                config: mod.events[event].config||"local"
+              });
+            }
+          }
         }
       } else {
-        if(id === "local") {
-          if(config.deny_ip.indexOf("::1") === -1) config.deny_ip.push("::1");
-          if(config.deny_ip.indexOf("127.0.0.0/8") === -1) config.deny_ip.push("127.0.0.0/8");
-        } else if(id === "all") {
-          config.deny_ip = ["0.0.0.0/0"];
-          delete config.grant_ip;
-        } else if(net.isIP(id)) {
-          config.deny_ip.push(id);
-        } else if(net.isIP(id.substr(0, id.lastIndexOf('/')))) {
-          let ipv = net.isIP(id.substr(0, id.lastIndexOf('/')));
-          let sn = parseInt(id.substr(id.lastIndexOf('/')+1))
-
-          if(ipv === 4 && (sn > 32 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
-          if(ipv === 6 && (sn > 128 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
-          
-          if(ipv === 4) {
-            let block = 0;
-            id.substr(0, id.lastIndexOf('/')).split('.').forEach(item=>{
-              block <<= 8;
-              block |= parseInt(item);
-            });
-
-            block >>= 32-sn;
-            block <<= 32-sn;
-
-            let subnet = ((block>>24)&0xFF) + "." +
-                         ((block>>16)&0xFF) + "." +
-                         ((block>> 8)&0xFF) + "." +
-                         ((block    )&0xFF) + "/" + sn;
-
-            if(config.deny_ip.indexOf(subnet) === -1) config.deny_ip.push(subnet);
-          } else {
-            config.deny_ip.push(id);
-          }
-        } else {
-          return {"type": "ERROR", "msg": "invalid IP address: " + escape_string(opt)};
-        }
+        return {"type": "ERROR", "msg": "module " + escape_string(filename) + " exported an instance of " + mod.constructor.name + " instead of an instance of Object"};
       }
-    } else if(opts.length === 2 && ['granted', 'denied'].indexOf(opts[1].toLowerCase()) === -1) {
-      return {"type": "ERROR", "msg": "unknown action: " + escape_string(opts[1])};
-    } else {
-      for(let opt of opts) {
-        if(opt.toLowerCase() === "local") {
-          config.grant_ip.push("::1");
-          config.grant_ip.push("127.0.0.0/8");
-        } else if(net.isIP(opt)) {
-          config.grant_ip.push(opt);
-        } else if(net.isIP(opt.substr(0, opt.lastIndexOf('/')))) {
-          let ipv = net.isIP(opt.substr(0, opt.lastIndexOf('/')));
-          let sn = parseInt(opt.substr(opt.lastIndexOf('/')+1))
-
-          if(ipv === 4 && (sn > 32 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
-          if(ipv === 6 && (sn > 128 || sn <= 0)) return {"type": "ERROR", "msg": "invalid subnet: " + escape_string(opt)};
-          
-          if(ipv === 4) {
-            let block = 0;
-            opt.substr(0, opt.lastIndexOf('/')).split('.').forEach(item=>{
-              block <<= 8;
-              block |= parseInt(item);
-            });
-
-            block >>= 32-sn;
-            block <<= 32-sn;
-
-            let subnet = ((block>>24)&0xFF) + "." +
-                         ((block>>16)&0xFF) + "." +
-                         ((block>> 8)&0xFF) + "." +
-                         ((block    )&0xFF) + "/" + sn;
-
-            if(config.grant_ip.indexOf(subnet) === -1) config.grant_ip.push(subnet);
-          } else {
-            config.grant_ip.push(opt);
-          }
-        } else {
-          return {"type": "ERROR", "msg": "invalid IP address: " + escape_string(opt)};
-        }
-      }
-    }
-
-    return {"type": "GOOD"};
-  },
-  "ErrorDocument": function(config, bstack, code, _filename) {
-    if(code === undefined) return {"type": "ERROR", "msg": "two arguments required: Status Code and Filename"};
-    if(_filename === undefined) return {"type": "ERROR", "msg": "filename argument not specified"};
-
-    if(STATUS_CODES[code] === undefined) return {"type": "ERROR", "msg": "no such status code: " + code};
-    let filename = resolve_envvars(_filename);
-    if(filename instanceof Array) return filename;
-
-    config.webpages = config.webpages||{};
-    config.webpages[code] = filename;
-    
-    return {"type": "GOOD"};
-  },
-  "ServerTokens": function(config, bstack, _opt) {
-    if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
-    let opt = _opt.toLowerCase();
-    config.headers = config.headers||{};
-
-    if(opt === "full") {
-      config.headers["server"] = AMETHYST_PRODUCT + "/" + AMETHYST_VERSION + " (" + AMETHYST_PLATFORM + ")";
-    } else if(opt === "min" || opt === "minimal") {
-      config.headers["server"] = AMETHYST_PRODUCT + "/" + AMETHYST_VERSION;
-    } else if(opt === "prod" || opt === "productonly") {
-      config.headers["server"] = AMETHYST_PRODUCT;
-    } else if(opt === "gone" && config.headers["server"]) {
-      delete config.headers["server"];
-    } else {
-      return {"type": "ERROR", "msg": "unknown token type: " + escape_string(opt)};
-    }
-    
-    return {"type": "GOOD"};
-  },
-  "Header": function(config, bstack, _header, _value) {
-    if(_header === undefined) return {"type": "ERROR", "msg": "missing header-value arguments"};
-    if(_value === undefined) return {"type": "ERROR", "msg": "missing value argument"};
-    
-    let value = resolve_envvars(_value);
-    let header = _header.toLowerCase();
-    if(value instanceof Array) return value;
- 
-    config.headers = config.headers||{};
-
-    if(DISALLOWED_CUSTOM_HEADERS.indexOf(header) === -1) {
-      config.headers[header] = value;
-    } else if(header === "server") {
-      return {"type": "ERROR", "msg": "not allowed to set server header; use ServerTokens directive"};
-    } else {
-      return {"type": "ERROR", "msg": "not allowed to set header: " + escape_string(header)};
-    }
-    
-    return {"type": "GOOD"};
-  },
-  "RemoteHostMode": function(config, bstack, _mode) {
-    if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
-    if(_mode === undefined) return {"type": "ERROR", "msg": "missing argument: mode"};
-    let mode = resolve_envvars(_mode);
-    if(mode instanceof Array) return mode;
-    mode = mode.toLowerCase();
-    
-    if(mode === "proxy") {
-      config.proxy = true;
-    } else if(mode === "head") {
-      config.proxy = false;
-    } else {
-      return {"type": "ERROR", "msg": "unrecognized mode: " + escape_string(mode)};
-    }
-    
-    return {"type": "GOOD"};
-  },
-  "AccessLogFormat": function(config, bstack, format, name) {
-    if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
-    if(format === undefined) return {"type": "ERROR", "msg": "missing format string"};
-    if(name === undefined) return {"type": "ERROR", "msg": "no name given for format string"};
-    if(name.length === 0) return {"type": "ERROR", "msg": "name must be longer than zero characters"};
-    
-    // TODO: Validate format argument
-
-    config.logs = config.logs||{};
-    config.logs.access_format = config.logs.access_format||{};
-
-    config.logs.access_format[name] = format;
-    
-    return {"type": "GOOD"};
-  },
-  "TimeFormat": function(config, bstack, format) {
-    if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
-    if(format === undefined) return {"type": "ERROR", "msg": "missing format string"};
-
-    // TODO: Validate format argument
-
-    config.logs = config.logs||{};
-    config.logs.timefmt = format;
-    
-    return {"type": "GOOD"};
-  },
-  "TimeZone": function(config, bstack, _opt, arg2) {
-    if(bstack.length) return {"type": "ERROR", "msg": "not allowed inside blocks"};
-    if(_opt === undefined) return {"type": "ERROR", "msg": "at least one argument required"};
-    let opt = _opt.toLowerCase();
-
-    config.logs = config.logs||{};
-    
-    if(opt === "system") {
-      let d = new Date();
-      let z = d.getTimezoneOffset();
-      let name = d.toLocaleTimeString('en-us', {timeZoneName:'short'}).split(' ')[2];
-
-      config.logs.tz =  {name};
-      
-      let tzstr = "";
-      tzstr += (z>=0?'-':'+');  // backwards, I know. It's stupid.
-      tzstr += (Math.floor(Math.abs(z)/60)<10?("0"+Math.floor(Math.abs(z)/60)):Math.floor(Math.abs(z)/60));
-      tzstr += (Math.floor(Math.abs(z)%60)<10?("0"+Math.floor(Math.abs(z)%60)):Math.floor(Math.abs(z)%60));
-
-      config.logs.tz.time = tzstr;
-    } else if(opt === "z" || opt === "zulu") {
-      config.logs.tz = {name:"UTC", time:"+0000"};
-    } else if(arg2 && /^[a-z]{3}$/.test(opt) && /^[\+-][0-9]{2}:?[0-9]{2}$/.test(arg2)) {
-      config.logs.tz =  {name: opt, time: arg2.replace(':', '')};
-    } else if(arg2) {
-      return {"type": "ERROR", "msg": "invalid timezone spec: " + escape_string(opt.toUpperCase() + " " + arg2)};
-    } else {
-      return {"type": "ERROR", "msg": "invalid timezone string: " + escape_string(opt.toUpperCase())};
-    }
-
-    return {"type": "GOOD"};
-  },
-  "SetEnv": function(config, bstack, _key, value) {
-    if(_key === undefined) return {"type": "ERROR", "msg": "no environment variable name specified"};
-    if(value === undefined) return {"type": "ERROR", "msg": "no environment variable value specified"};
-    let key = _key.toUpperCase();
-
-    if(/^[A-Z_][A-Z_0-9]*$/.test(key)) {
-      process.env[key] = value;
-    } else {
-      return {"type": "ERROR", "msg": "invalid environment variable name: " + escape_string(key)};
-    }
-
-    return {"type": "GOOD"};
-  },
-  "UnsetEnv": function(config, bstack, _key, value) {
-    if(_key === undefined) return {"type": "ERROR", "msg": "no environment variable name specified"};
-    if(value === undefined) return {"type": "ERROR", "msg": "no environment variable value specified"};
-    let key = _key.toUpperCase();
-
-    if(/^[A-Z_][A-Z_0-9]*$/.test(key) && process.env[key] !== undefined) {
-      delete process.env[key];
-    } else {
-      return {"type": "ERROR", "msg": "invalid environment variable name: " + escape_string(key)};
-    }
-
-    return {"type": "GOOD"};
-  },
-  "LoadModule": function(config, bstack, _module_name, _priority, _filename) {
-    if(_module_name === undefined) return {"type": "ERROR", "msg": "expected module name, priority, and path to src"};
-    if(_priority === undefined) return {"type": "ERROR", "msg": "expected priority and path to src in addition to module name"};
-    if(_filename === undefined) return {"type": "ERROR", "msg": "missing path to src file"};
-    let filename = resolve_envvars(_filename);
-    if(filename instanceof Array) return filename;
-    let module_name = _module_name.toLowerCase();
-    
-    if(modules.indexOf(module_name) !== -1) return {"type": "ERROR", "msg": "cannot load module " + escape_string(module_name) + ": module already loaded"};
-    if(!path.isAbsolute(filename)) filename = path.join(process.env.PWD + "/" + filename);
-    
-    let priority;
-
-    if(/^[\+-]?[0-9]+(?:\.[0-9]+)?$/.test(_priority)) {
-      priority = parseFloat(_priority);
-    } else {
-      return {"type": "ERROR", "msg": "invalid priority: not a number: " + escape_string(_priority)};
-    }
-
-    let mod = {};
-    
-    modules.push(module_name);
-    config[module_name] = {};
-    
-    try {
-      mod = require(filename);
-    } catch(err) {
-      if(err.constructor.name !== "Error") {
-        return {"type": "ERROR", "msg": "uncaught " + err.constructor.name + " while loading module: " + escape_string(filename) + ": " + err.messsage};
-      } else if(err.code === "MODULE_NOT_FOUND") {
-        return {"type": "ERROR", "msg": "no such module: " + escape_string(filename)};
-      } else if(err.code === "EISDIR") {
-        return {"type": "ERROR", "msg": "requested path is directory: " + escape_string(filename)};
-      } else if(err.code === "EACCESS") {
-        return {"type": "ERROR", "msg": "insufficient read privileges: " + escape_string(filename)};
-      }
-    }
-
-    if(mod.constructor.name === "Object") { 
-      if(mod.directives !== undefined && mod.directives !== null && mod.directives.constructor.name === "Object") {
-        for(let directive in mod.directives) {
-          if(Directives[directive] === undefined) {
-            modules_from_directives[directive] = module_name;
-            Directives[directive] = function() {
-              try {
-                return mod.directives[directive].apply(null, arguments);
-              } catch(err) {
-                return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
-              }
-            }
-          }
-        }
-      }
-
-      if(mod.blocks !== undefined && mod.blocks !== null && mod.blocks.constructor.name === "Object") {
-        for(let block in mod.blocks) {
-          if(Blocks[block] === undefined) {
-            modules_from_blocks[block] = module_name;
-            Blocks[block] = function() {
-              try {
-                return mod.blocks[block].apply(null, arguments);
-              } catch(err) {
-                return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
-              }
-            }
-          }
-        }
-      }
-
-      if(mod.events !== undefined && mod.events !== null && mod.events.constructor.name === "Object") {
-        for(let event in mod.events) {
-          /*Events[priority][module_name] = {};
-          Events[priority][module_name][event] = (function() {
-            try {
-              return mod.events[event].apply(null, arguments);
-            } catch(err) {
-              return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
-            }
-          });*/
-
-          Events.register(module_name, priority, event, (function() {
-            try {
-              return mod.events[event].apply(null, arguments);
-            } catch(err) {
-              return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
-            }
-          }), mod.special && mod.special === "fullconfig");
-        }
-      }
-    } else {
-      return {"type": "ERROR", "msg": "module " + escape_string(filename) + " exported an instance of " + mod.constructor.name + " instead of an instance of Object"};
-    }
+    },
+    config: "global",
   }
 }
 
@@ -1348,35 +1466,37 @@ let Events = new EventStore();
 ///////////////////////////// Register Core Events /////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
-Events.register('core', 0x80, 'connection',
-function connection(config, {client, server}) {
-  // enforce Require directive
-  const match = match_ip_addresses;  // used as alias for easier reading
+Events.register('core', 0x80, 'connection', {
+  callback: function connection(config, {client, server}) {
+    // enforce Require directive
+    const match = match_ip_addresses;  // used as alias for easier reading
 
-  for(let deny of config.deny_ip) {
-    if(match(deny, client.ip)) {
-      return {"type": "TCP", "action": "CLOSE"};
-    }
-  }
-  
-  let ip_granted = true;
-  if(config.grant_ip.length) {
-    ip_granted = false;
-
-    for(let grant of config.grant_ip) {
-      if(match(grant, client.ip)) {
-        ip_granted = true;
+    for(let deny of config.deny_ip) {
+      if(match(deny, client.ip)) {
+        return {"type": "TCP", "action": "CLOSE"};
       }
     }
-  }
-
-  if(ip_granted === false) {
-    return {"type": "TCP", "action": "CLOSE"};
-  }
   
-  // All checks passed, IP address allowed
-  return null;
-}, false);
+    let ip_granted = true;
+    if(config.grant_ip.length) {
+      ip_granted = false;
+
+      for(let grant of config.grant_ip) {
+        if(match(grant, client.ip)) {
+          ip_granted = true;
+        }
+      }
+    }
+
+    if(ip_granted === false) {
+      return {"type": "TCP", "action": "CLOSE"};
+    }
+  
+    // All checks passed, IP address allowed
+    return null;
+  },
+  config: "local"
+});
 
 let modules_from_blocks = {
   "Endpoint": "core",
@@ -1403,11 +1523,14 @@ function execute_frames(config_obj, block_stack, config_frames) {
 
     for(let frame of config_frames.content) {
       if(frame.type === "DIRECTIVE") {
-        let method = Directives[frame.directive];
-        if(method instanceof Function) {
+        let dir = Directives[frame.directive];
+        if(dir instanceof Object) {
+          let method = dir.callback;
+          let config_scope = dir.config;
+
           let result;
           
-          if(frame.directive !== "Include" && frame.directive !== "LoadModule") result = method.apply(null, [config_obj[modules_from_directives[frame.directive]], block_stack, ...frame.args]);
+          if(config_scope === "local") result = method.apply(null, [config_obj[modules_from_directives[frame.directive]], block_stack, ...frame.args]);
           else result = method.apply(null, [config_obj, block_stack, ...frame.args]);
           
           if(typeof(result) === "object" && result.type === "ERROR") {
