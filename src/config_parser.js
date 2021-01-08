@@ -1194,15 +1194,12 @@ let Directives = {
     config: "local",
   },
   "LoadModule": {
-    callback: function(config, bstack, _module_name, _priority, _filename) {
-      if(_module_name === undefined) return {"type": "ERROR", "msg": "expected module name, priority, and path to src"};
-      if(_priority === undefined) return {"type": "ERROR", "msg": "expected priority and path to src in addition to module name"};
+    callback: function(config, bstack, _priority, _filename) {
+      if(_priority === undefined) return {"type": "ERROR", "msg": "expected priority and path to module src"};
       if(_filename === undefined) return {"type": "ERROR", "msg": "missing path to src file"};
       let filename = resolve_envvars(_filename);
       if(filename instanceof Array) return filename;
-      let module_name = _module_name.toLowerCase();
       
-      if(modules.indexOf(module_name) !== -1) return {"type": "ERROR", "msg": "cannot load module " + escape_string(module_name) + ": module already loaded"};
       if(!path.isAbsolute(filename)) filename = path.join(process.env.PWD + "/" + filename);
       
       let priority;
@@ -1214,9 +1211,6 @@ let Directives = {
       }
 
       let mod = {};
-      
-      modules.push(module_name);
-      config[module_name] = {};
       
       try {
         mod = require(filename);
@@ -1231,6 +1225,12 @@ let Directives = {
           return {"type": "ERROR", "msg": "insufficient read privileges: " + escape_string(filename)};
         }
       }
+      
+      let module_name = mod.name;
+      if(modules.indexOf(module_name) !== -1) return {"type": "ERROR", "msg": "cannot load module " + escape_string(module_name) + ": module already loaded"};
+      
+      modules.push(module_name);
+      config[module_name] = {};
       
       let load_events = [];
 
