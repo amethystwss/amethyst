@@ -1231,6 +1231,8 @@ let Directives = {
           return {"type": "ERROR", "msg": "insufficient read privileges: " + escape_string(filename)};
         }
       }
+      
+      let load_events = [];
 
       if(mod.constructor.name === "Object") { 
         if(mod.directives !== undefined && mod.directives !== null && mod.directives.constructor.name === "Object") {
@@ -1305,7 +1307,31 @@ let Directives = {
 
         if(mod.events !== undefined && mod.events !== null && mod.events.constructor.name === "Object") {
           for(let event in mod.events) {
-            if(mod.events[event] instanceof Function) {
+            if(event === "load") {
+              if(mod.events[event] instanceof Function) {
+                load_events.push({
+                  callback: function() {
+                    try {
+                      return mod.events[event].apply(null, arguments);
+                    } catch(err) {
+                      return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
+                    }
+                  },
+                  config: "local"
+                });
+              } else if(mod.events[event] instanceof Object) {
+                load_events.push({
+                  callback: function() {
+                    try {
+                      return mod.events[event].callback.apply(null, arguments);
+                    } catch(err) {
+                      return {"type": "ERROR", "msg": "Uncaught " + err.constructor.name + ": " + err.message + " " + err.stack.split('\n')[1].trim()};
+                    }
+                  },
+                  config: mod.events[event].config||"local"
+                });
+              }
+            } else if(mod.events[event] instanceof Function) {
               Events.register(module_name, priority, event, {
                 callback: (function() {
                   try {
@@ -1333,6 +1359,26 @@ let Directives = {
       } else {
         return {"type": "ERROR", "msg": "module " + escape_string(filename) + " exported an instance of " + mod.constructor.name + " instead of an instance of Object"};
       }
+      
+      let load_errors = [];
+
+      for(let load_event of load_events) {
+        let res;
+
+        if(load_event.config === "local") {
+          res = load_event.callback.apply(null, [config[module_name]]);
+        } else {
+          res = load_event.callback.apply(null, [config]);
+        }
+
+        res = res||{"type": "GOOD"};
+
+        if(res.type === "ERROR") {
+          load_errors.push(res);
+        }
+      }
+
+      if(load_errors.length) return load_errors;
     },
     config: "global",
   }
@@ -1594,7 +1640,21 @@ function get_config(config_file) {
   global.parser.resolve_envvars = resolve_envvars;
 
   let error = execute_frames(config_obj, [], config_frames);
-    
+  
+  if(!error) {
+    let results = Events.dispatch("postconfig", null, config_obj);
+
+    for(let result of results) {
+      if(result.ret instanceof Object) {
+        if(result.ret.type === "ERROR") {
+          console.error("error: " + result.module + ": " + result.ret.msg);
+          error = true;
+          continue;
+        }
+      }
+    }
+  }
+
   delete global.parser;
 
   if(error !== false) {
